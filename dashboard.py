@@ -1,170 +1,136 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import os
+from datetime import datetime
+from dotenv import load_dotenv
 
-# -----------------------
-# CONFIG
-# -----------------------
-st.set_page_config(page_title="HBO Portfolio Dashboard", layout="wide")
+# load_dotenv()  # ✅ Only used for local development
 
-# Theme toggle
-theme = st.toggle("🌙 Dark Mode", value=False)
+st.set_page_config(page_title="HBO Investor Dashboard", layout="wide", initial_sidebar_state="collapsed")
 
-if theme:
-    st.markdown("""
-        <style>
-        body, .stApp {
-            background-color: #0e1117;
-            color: white;
-        }
-        .download-button button {
-            background-color: #1f77b4 !important;
-            color: white !important;
-            border: none;
-        }
-        .stMetricBox {
-            background-color: #1c1f26;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #333;
-            color: white;
-            text-align: center;
-            font-size: 1.2rem;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-        <style>
-        .download-button button {
-            background-color: #f0f0f0 !important;
-            color: black !important;
-        }
-        .stMetricBox {
-            background-color: #f9f9f9;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #ccc;
-            color: black;
-            text-align: center;
-            font-size: 1.2rem;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+# -------------------
+# Theme Toggle
+# -------------------
+mode = st.toggle("Dark mode", value=False)
+theme = "plotly_dark" if mode else "plotly_white"
+button_style = """
+    <style>
+    .download-button button {
+        color: black !important;
+        background-color: white !important;
+    }
+    </style>
+""" if not mode else """
+    <style>
+    .download-button button {
+        color: white !important;
+        background-color: #444 !important;
+        border: 1px solid white !important;
+    }
+    </style>
+"""
+st.markdown(button_style, unsafe_allow_html=True)
 
-# -----------------------
-# PASSWORD
-# -----------------------
-PASSWORD = "hbo2024"
-
+# -------------------
+# Password protection
+# -------------------
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.title("HBO Portfolio Dashboard")
-    password_input = st.text_input("Enter password:", type="password")
-    if password_input == PASSWORD:
+    pw_input = st.text_input("Enter password to continue", type="password")
+    if pw_input == os.environ.get("APP_PASSWORD"):
         st.session_state.authenticated = True
-        st.rerun()
-    elif password_input:
+    elif pw_input:
         st.error("Incorrect password")
-        st.stop()
-    else:
-        st.stop()
+    st.stop()
 
-# -----------------------
-# LOAD DATA
-# -----------------------
-@st.cache_data(ttl=600)
+# -------------------
+# Load data
+# -------------------
+@st.cache_data
 def load_data():
-    hbo_url = "https://docs.google.com/spreadsheets/d/1QgnWMF_fF0fdkAEvZvfO-MfR1Gme6kwOqC4928te1J0/export?format=csv&gid=0"
-    ownership_url = "https://docs.google.com/spreadsheets/d/1QgnWMF_fF0fdkAEvZvfO-MfR1Gme6kwOqC4928te1J0/export?format=csv&gid=900806856"
+    hbo_url = os.environ.get("HBO_SHEET_URL")
+    ownership_url = os.environ.get("OWNERSHIP_SHEET_URL")
 
-    hbo_df = pd.read_csv(hbo_url, sep=",", decimal=",", encoding="utf-8-sig")
-    hbo_df.rename(columns=lambda x: x.strip().replace('\ufeff', ''), inplace=True)
-    hbo_df['Date'] = pd.to_datetime(hbo_df['Date'], dayfirst=True)
+    hbo_df = pd.read_csv(hbo_url)
+    hbo_df.columns = hbo_df.columns.str.strip()
+    hbo_df["Date"] = pd.to_datetime(hbo_df["Date"], dayfirst=True)
+    hbo_df = hbo_df.sort_values("Date")
 
-    owner_df = pd.read_csv(ownership_url, sep=",", decimal=",", encoding="utf-8-sig")
-    owner_df.rename(columns=lambda x: x.strip().replace('\ufeff', ''), inplace=True)
+    owner_df = pd.read_csv(ownership_url)
+    owner_df.columns = owner_df.columns.str.strip()
+    owner_df["Invested Capital"] = owner_df["Invested Capital"].replace("[€\s]", "", regex=True).str.replace(",", "").astype(float)
+    owner_df["Total Shares"] = owner_df["Total Shares"].astype(float)
 
     return hbo_df, owner_df
 
 hbo_df, owner_df = load_data()
+latest_price = hbo_df.iloc[-1]["HBO Share Price"]
+total_value = hbo_df.iloc[-1]["Total HBO Value"]
 
-# -----------------------
-# PROCESS DATA
-# -----------------------
-
-owner_df['Invested Capital'] = owner_df['Invested Capital'].replace({'€': '', ',': ''}, regex=True).astype(float)
-owner_df['Total Shares'] = owner_df['Total Shares'].astype(int)
-
-latest_price = hbo_df.sort_values("Date")["HBO Share Price"].iloc[-1]
-owner_df['Total Value (€)'] = owner_df['Total Shares'] * latest_price
-owner_df['Return (€)'] = owner_df['Total Value (€)'] - owner_df['Invested Capital']
-owner_df['ROI (%)'] = (owner_df['Return (€)'] / owner_df['Invested Capital']) * 100
-
-# -----------------------
-# CHARTS
-# -----------------------
-
+# -------------------
+# HBO Share Price Chart
+# -------------------
 col1, col2 = st.columns([4, 1])
 with col1:
-    st.title("HBO Share Price Performance")
+    st.subheader("HBO Share Price Performance")
 with col2:
-    st.markdown(f"""
-        <div class='stMetricBox'>
-            <div><strong>Latest Share Price</strong></div>
-            <div style='font-size: 1.5rem; margin-top: 5px;'>€ {latest_price:.2f}</div>
+    st.markdown(
+        f"""
+        <div style='border: 1px solid {"#888" if mode else "#ccc"}; padding: 10px; border-radius: 8px;
+                    background-color: {"#333" if mode else "#f9f9f9"}; text-align: center;'>
+            <div style='font-size: 14px; color: {"#ccc" if mode else "#333"};'>Latest Share Price</div>
+            <div style='font-size: 24px; font-weight: bold; color: {"#fff" if mode else "#111"};'>€ {latest_price:.2f}</div>
         </div>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True
+    )
 
-fig_line = px.line(hbo_df, x="Date", y="HBO Share Price", markers=True)
-fig_line.update_layout(template="plotly_dark" if theme else "plotly_white", margin=dict(t=40))
-st.plotly_chart(fig_line, use_container_width=True)
+fig = px.line(hbo_df, x="Date", y="HBO Share Price", title="", template=theme)
+fig.update_traces(line=dict(width=3))
+fig.update_layout(margin=dict(t=20, l=0, r=0, b=0), height=400)
+st.plotly_chart(fig, use_container_width=True)
 
+# -------------------
+# Ownership Table
+# -------------------
+owner_df["Value"] = owner_df["Total Shares"] * latest_price
+owner_df["Return (€)"] = owner_df["Value"] - owner_df["Invested Capital"]
+owner_df["ROI (%)"] = (owner_df["Return (€)"] / owner_df["Invested Capital"]) * 100
+
+owner_df_display = owner_df.copy()
+owner_df_display["Invested Capital"] = owner_df_display["Invested Capital"].map("€ {:.2f}".format)
+owner_df_display["Value"] = owner_df_display["Value"].map("€ {:.2f}".format)
+owner_df_display["Return (€)"] = owner_df_display["Return (€)"].map("€ {:.2f}".format)
+owner_df_display["ROI (%)"] = owner_df_display["ROI (%)"].map("{:.1f}%".format)
+
+st.subheader("Investor Breakdown")
+st.dataframe(owner_df_display.style.format(), use_container_width=True)
+
+# -------------------
+# Downloads
+# -------------------
 col1, col2 = st.columns(2)
-
 with col1:
-    fig_pie = px.pie(owner_df, values="Invested Capital", names="Full Name", title="Capital Invested Distribution")
-    fig_pie.update_layout(template="plotly_dark" if theme else "plotly_white")
-    st.plotly_chart(fig_pie, use_container_width=True)
-
+    st.download_button(
+        "Download HBO History CSV",
+        hbo_df.to_csv(index=False).encode(),
+        "hbo_history.csv",
+        mime="text/csv",
+        key="download-hbo",
+        help="Download share price history",
+    )
 with col2:
-    fig_bar = px.bar(owner_df, x="Full Name", y="Total Shares", title="Shares Held Per Investor", text_auto=True)
-    fig_bar.update_layout(template="plotly_dark" if theme else "plotly_white")
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-st.subheader("Investor Performance Overview")
-
-# Format table
-table_df = owner_df.copy()
-table_df = table_df.rename(columns={
-    "Full Name": "Name",
-    "Invested Capital": "Invested (€)",
-    "Total Shares": "Shares"
-})
-
-table_df["Invested (€)"] = table_df["Invested (€)"].map("€ {:,.2f}".format)
-table_df["Total Value (€)"] = table_df["Total Value (€)"].map("€ {:,.2f}".format)
-table_df["Return (€)"] = table_df["Return (€)"].map("€ {:,.2f}".format)
-table_df["ROI (%)"] = table_df["ROI (%)"].map("{:.2f}%".format)
-
-st.dataframe(table_df[["Name", "Invested (€)", "Shares", "Total Value (€)", "Return (€)", "ROI (%)"]],
-             use_container_width=True)
-
-# -----------------------
-# DOWNLOAD BUTTONS
-# -----------------------
-st.markdown("### Downloads")
-col1, col2 = st.columns(2)
-
-with col1:
-    st.download_button("Download HBO Price Data", hbo_df.to_csv(index=False).encode('utf-8'),
-                       "hbo_data.csv", "text/csv", key="hbo_download")
-
-with col2:
-    st.download_button("Download Investor Table", table_df.to_csv(index=False).encode('utf-8'),
-                       "investors.csv", "text/csv", key="inv_download")
+    st.download_button(
+        "Download Investor Table CSV",
+        owner_df.to_csv(index=False).encode(),
+        "investors.csv",
+        mime="text/csv",
+        key="download-investors",
+        help="Download investor data",
+    )
 
 # -----------------------
 # FOOTER
