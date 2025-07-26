@@ -79,14 +79,11 @@ if not st.session_state.authenticated:
 def load_data():
     hbo_url = "https://docs.google.com/spreadsheets/d/1QgnWMF_fF0fdkAEvZvfO-MfR1Gme6kwOqC4928te1J0/export?format=csv&gid=0"
     ownership_url = "https://docs.google.com/spreadsheets/d/1QgnWMF_fF0fdkAEvZvfO-MfR1Gme6kwOqC4928te1J0/export?format=csv&gid=900806856"
-
     hbo_df = pd.read_csv(hbo_url, sep=",", decimal=",", encoding="utf-8-sig")
     hbo_df.rename(columns=lambda x: x.strip().replace('\ufeff', ''), inplace=True)
     hbo_df['Date'] = pd.to_datetime(hbo_df['Date'], dayfirst=True)
-
     owner_df = pd.read_csv(ownership_url, sep=",", decimal=",", encoding="utf-8-sig")
     owner_df.rename(columns=lambda x: x.strip().replace('\ufeff', ''), inplace=True)
-
     return hbo_df, owner_df
 
 hbo_df, owner_df = load_data()
@@ -94,19 +91,16 @@ hbo_df, owner_df = load_data()
 # -----------------------
 # PROCESS DATA
 # -----------------------
-
 owner_df['Invested Capital'] = owner_df['Invested Capital'].replace({'€': '', ',': ''}, regex=True).astype(float)
 owner_df['Total Shares'] = owner_df['Total Shares'].astype(int)
-
 latest_price = hbo_df.sort_values("Date")["HBO Share Price"].iloc[-1]
 owner_df['Total Value (€)'] = owner_df['Total Shares'] * latest_price
 owner_df['Return (€)'] = owner_df['Total Value (€)'] - owner_df['Invested Capital']
 owner_df['ROI (%)'] = (owner_df['Return (€)'] / owner_df['Invested Capital']) * 100
 
 # -----------------------
-# CHARTS
+# SHARE PRICE CHART
 # -----------------------
-
 col1, col2 = st.columns([4, 1])
 with col1:
     st.title("HBO Share Price Performance")
@@ -122,6 +116,9 @@ fig_line = px.line(hbo_df, x="Date", y="HBO Share Price", markers=True)
 fig_line.update_layout(template="plotly_dark" if theme else "plotly_white", margin=dict(t=40))
 st.plotly_chart(fig_line, use_container_width=True)
 
+# -----------------------
+# PIE & BAR CHARTS
+# -----------------------
 col1, col2 = st.columns(2)
 
 with col1:
@@ -135,12 +132,9 @@ with col2:
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------
-# BENCHMARK CHART
+# BENCHMARK RETURNS
 # -----------------------
-
-st.subheader("📊 HBO vs Benchmark Returns")
-
-period = st.selectbox("Select Time Period", ["YTD", "1M", "1Y", "2Y"])
+@st.cache_data(ttl=3600)
 def fetch_benchmark_returns(period):
     tickers = {
         "S&P 500": "^GSPC",
@@ -151,31 +145,44 @@ def fetch_benchmark_returns(period):
     end = datetime.today()
     start = {
         "YTD": datetime(end.year, 1, 1),
-        "1M": end - pd.DateOffset(days=30),
+        "1M": end - pd.DateOffset(months=1),
         "1Y": end - pd.DateOffset(years=1),
         "2Y": end - pd.DateOffset(years=2)
     }.get(period, end - pd.DateOffset(years=1))
-    prices = yf.download(list(tickers.values()), start=start, end=end)["Adj Close"]
-    returns = ((prices.iloc[-1] / prices.iloc[0]) - 1) * 100
-    df = pd.DataFrame({"Benchmark": list(tickers.keys()), "Return (%)": returns.values})
-    return df
 
-try:
-    bench_df = fetch_benchmark_returns(period)
-    hbo_return = ((hbo_df["HBO Share Price"].iloc[-1] / hbo_df[hbo_df["Date"] >= pd.to_datetime(datetime.today() - pd.DateOffset(months=12))]["HBO Share Price"].iloc[0]) - 1) * 100
-    bench_df.loc[len(bench_df.index)] = ["HBO Fund", hbo_return]
+    try:
+        prices = yf.download(list(tickers.values()), start=start, end=end, progress=False)["Adj Close"]
+        returns = ((prices.iloc[-1] / prices.iloc[0]) - 1) * 100
+        df = pd.DataFrame({"Benchmark": list(tickers.keys()), "Return (%)": returns.values})
+        return df
+    except Exception as e:
+        return None
+
+st.subheader("📊 HBO vs Benchmark Returns")
+period = st.selectbox("Select Time Period", ["YTD", "1M", "1Y", "2Y"], index=2)
+bench_df = fetch_benchmark_returns(period)
+
+if bench_df is not None:
+    start_date = {
+        "YTD": datetime(datetime.today().year, 1, 1),
+        "1M": datetime.today() - pd.DateOffset(months=1),
+        "1Y": datetime.today() - pd.DateOffset(years=1),
+        "2Y": datetime.today() - pd.DateOffset(years=2),
+    }[period]
+    hbo_filtered = hbo_df[hbo_df["Date"] >= start_date]
+    if not hbo_filtered.empty:
+        hbo_return = ((hbo_filtered["HBO Share Price"].iloc[-1] / hbo_filtered["HBO Share Price"].iloc[0]) - 1) * 100
+        bench_df.loc[len(bench_df.index)] = ["HBO Fund", hbo_return]
     fig_benchmark = px.bar(bench_df, x="Benchmark", y="Return (%)", text_auto=".2f")
     fig_benchmark.update_layout(template="plotly_dark" if theme else "plotly_white")
     st.plotly_chart(fig_benchmark, use_container_width=True)
-except:
-    st.warning("Failed to fetch benchmark data.")
+else:
+    st.warning("⚠️ Failed to fetch benchmark data. Try refreshing later.")
 
 # -----------------------
 # PERFORMANCE TABLE
 # -----------------------
-
 st.subheader("Investor Performance Overview")
-
 table_df = owner_df.copy()
 table_df = table_df.rename(columns={
     "Full Name": "Name",
@@ -186,7 +193,6 @@ table_df["Invested (€)"] = table_df["Invested (€)"].map("€ {:,.2f}".format
 table_df["Total Value (€)"] = table_df["Total Value (€)"].map("€ {:,.2f}".format)
 table_df["Return (€)"] = table_df["Return (€)"].map("€ {:,.2f}".format)
 table_df["ROI (%)"] = table_df["ROI (%)"].map("{:.2f}%".format)
-
 st.dataframe(table_df[["Name", "Invested (€)", "Shares", "Total Value (€)", "Return (€)", "ROI (%)"]],
              use_container_width=True)
 
@@ -198,10 +204,10 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.download_button("Download HBO Price Data", hbo_df.to_csv(index=False).encode('utf-8'),
-                       "hbo_data.csv", "text/csv", key="hbo_download")
+                       "hbo_data.csv", "text/csv", key="hbo_download", help="Download full HBO share price history")
 
 with col2:
     st.download_button("Download Investor Table", table_df.to_csv(index=False).encode('utf-8'),
-                       "investors.csv", "text/csv", key="inv_download")
+                       "investors.csv", "text/csv", key="inv_download", help="Download investor performance table")
 
 st.caption("© Built by Henri | Live from Google Sheets")
