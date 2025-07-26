@@ -1,6 +1,9 @@
+# dashboard.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from datetime import datetime
+import yfinance as yf
 
 # -----------------------
 # CONFIG
@@ -20,16 +23,14 @@ if theme:
         .download-button button {
             background-color: #1f77b4 !important;
             color: white !important;
-            border: none;
         }
         .stMetricBox {
             background-color: #1c1f26;
             padding: 1rem;
             border-radius: 0.5rem;
-            border: 1px solid #333;
+            border: 1px solid #444;
             color: white;
             text-align: center;
-            font-size: 1.2rem;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -47,7 +48,6 @@ else:
             border: 1px solid #ccc;
             color: black;
             text-align: center;
-            font-size: 1.2rem;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -114,7 +114,7 @@ with col2:
     st.markdown(f"""
         <div class='stMetricBox'>
             <div><strong>Latest Share Price</strong></div>
-            <div style='font-size: 1.5rem; margin-top: 5px;'>€ {latest_price:.2f}</div>
+            <div style='font-size: 1.5rem;'>€ {latest_price:.2f}</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -134,16 +134,54 @@ with col2:
     fig_bar.update_layout(template="plotly_dark" if theme else "plotly_white")
     st.plotly_chart(fig_bar, use_container_width=True)
 
+# -----------------------
+# BENCHMARK CHART
+# -----------------------
+
+st.subheader("📊 HBO vs Benchmark Returns")
+
+period = st.selectbox("Select Time Period", ["YTD", "1M", "1Y", "2Y"])
+def fetch_benchmark_returns(period):
+    tickers = {
+        "S&P 500": "^GSPC",
+        "NASDAQ": "^IXIC",
+        "BEL20": "^BFX",
+        "Gold": "GC=F"
+    }
+    end = datetime.today()
+    start = {
+        "YTD": datetime(end.year, 1, 1),
+        "1M": end - pd.DateOffset(days=30),
+        "1Y": end - pd.DateOffset(years=1),
+        "2Y": end - pd.DateOffset(years=2)
+    }.get(period, end - pd.DateOffset(years=1))
+    prices = yf.download(list(tickers.values()), start=start, end=end)["Adj Close"]
+    returns = ((prices.iloc[-1] / prices.iloc[0]) - 1) * 100
+    df = pd.DataFrame({"Benchmark": list(tickers.keys()), "Return (%)": returns.values})
+    return df
+
+try:
+    bench_df = fetch_benchmark_returns(period)
+    hbo_return = ((hbo_df["HBO Share Price"].iloc[-1] / hbo_df[hbo_df["Date"] >= pd.to_datetime(datetime.today() - pd.DateOffset(months=12))]["HBO Share Price"].iloc[0]) - 1) * 100
+    bench_df.loc[len(bench_df.index)] = ["HBO Fund", hbo_return]
+    fig_benchmark = px.bar(bench_df, x="Benchmark", y="Return (%)", text_auto=".2f")
+    fig_benchmark.update_layout(template="plotly_dark" if theme else "plotly_white")
+    st.plotly_chart(fig_benchmark, use_container_width=True)
+except:
+    st.warning("Failed to fetch benchmark data.")
+
+# -----------------------
+# PERFORMANCE TABLE
+# -----------------------
+
 st.subheader("Investor Performance Overview")
 
-# Format table
 table_df = owner_df.copy()
 table_df = table_df.rename(columns={
     "Full Name": "Name",
     "Invested Capital": "Invested (€)",
     "Total Shares": "Shares"
 })
-
 table_df["Invested (€)"] = table_df["Invested (€)"].map("€ {:,.2f}".format)
 table_df["Total Value (€)"] = table_df["Total Value (€)"].map("€ {:,.2f}".format)
 table_df["Return (€)"] = table_df["Return (€)"].map("€ {:,.2f}".format)
@@ -166,7 +204,4 @@ with col2:
     st.download_button("Download Investor Table", table_df.to_csv(index=False).encode('utf-8'),
                        "investors.csv", "text/csv", key="inv_download")
 
-# -----------------------
-# FOOTER
-# -----------------------
 st.caption("© Built by Henri | Live from Google Sheets")
