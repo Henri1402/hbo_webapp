@@ -51,18 +51,32 @@ hbo_df, owner_df = load_data()
 # -----------------------
 owner_df['Invested Capital'] = owner_df['Invested Capital'].replace({'€': '', ',': ''}, regex=True).astype(float)
 owner_df['Total Shares'] = owner_df['Total Shares'].astype(int)
+
+# latest share price
 latest_price = hbo_df.sort_values("Date")["HBO Share Price"].iloc[-1]
+
+# compute current total value per investor
 owner_df['Total Value (€)'] = owner_df['Total Shares'] * latest_price
 owner_df['Return (€)'] = owner_df['Total Value (€)'] - owner_df['Invested Capital']
 owner_df['ROI (%)'] = (owner_df['Return (€)'] / owner_df['Invested Capital']) * 100
 
+# compute total assets under management
+total_aum = owner_df['Total Value (€)'].sum()
+
 # -----------------------
-# SHARE PRICE CHART
+# SHARE PRICE CHART + METRICS
 # -----------------------
-col1, col2 = st.columns([4, 1])
+col1, col2, col3 = st.columns([4, 1, 1])
 with col1:
     st.title("HBO Share Price Performance")
 with col2:
+    st.markdown(f"""
+        <div style='background-color: #f9f9f9; padding: 1rem; border-radius: 0.5rem; border: 1px solid #ccc; text-align: center;'>
+            <div><strong>AUM</strong></div>
+            <div style='font-size: 1.5rem;'>€ {total_aum:,.2f}</div>
+        </div>
+    """, unsafe_allow_html=True)
+with col3:
     st.markdown(f"""
         <div style='background-color: #f9f9f9; padding: 1rem; border-radius: 0.5rem; border: 1px solid #ccc; text-align: center;'>
             <div><strong>Latest Share Price</strong></div>
