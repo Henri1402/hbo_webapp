@@ -10,48 +10,6 @@ import yfinance as yf
 # -----------------------
 st.set_page_config(page_title="HBO Portfolio Dashboard", layout="wide")
 
-# Theme toggle
-theme = st.toggle("🌙 Dark Mode", value=False)
-
-if theme:
-    st.markdown("""
-        <style>
-        body, .stApp {
-            background-color: #0e1117;
-            color: white;
-        }
-        .download-button button {
-            background-color: #1f77b4 !important;
-            color: white !important;
-        }
-        .stMetricBox {
-            background-color: #1c1f26;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #444;
-            color: white;
-            text-align: center;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-        <style>
-        .download-button button {
-            background-color: #f0f0f0 !important;
-            color: black !important;
-        }
-        .stMetricBox {
-            background-color: #f9f9f9;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #ccc;
-            color: black;
-            text-align: center;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
 # -----------------------
 # PASSWORD
 # -----------------------
@@ -106,14 +64,14 @@ with col1:
     st.title("HBO Share Price Performance")
 with col2:
     st.markdown(f"""
-        <div class='stMetricBox'>
+        <div style='background-color: #f9f9f9; padding: 1rem; border-radius: 0.5rem; border: 1px solid #ccc; text-align: center;'>
             <div><strong>Latest Share Price</strong></div>
             <div style='font-size: 1.5rem;'>€ {latest_price:.2f}</div>
         </div>
     """, unsafe_allow_html=True)
 
 fig_line = px.line(hbo_df, x="Date", y="HBO Share Price", markers=True)
-fig_line.update_layout(template="plotly_dark" if theme else "plotly_white", margin=dict(t=40))
+fig_line.update_layout(template="plotly_white", margin=dict(t=40))
 st.plotly_chart(fig_line, use_container_width=True)
 
 # -----------------------
@@ -123,12 +81,12 @@ col1, col2 = st.columns(2)
 
 with col1:
     fig_pie = px.pie(owner_df, values="Invested Capital", names="Full Name", title="Capital Invested Distribution")
-    fig_pie.update_layout(template="plotly_dark" if theme else "plotly_white")
+    fig_pie.update_layout(template="plotly_white")
     st.plotly_chart(fig_pie, use_container_width=True)
 
 with col2:
     fig_bar = px.bar(owner_df, x="Full Name", y="Total Shares", title="Shares Held Per Investor", text_auto=True)
-    fig_bar.update_layout(template="plotly_dark" if theme else "plotly_white")
+    fig_bar.update_layout(template="plotly_white")
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------
@@ -148,14 +106,22 @@ def fetch_benchmark_returns(period):
         "1M": end - pd.DateOffset(months=1),
         "1Y": end - pd.DateOffset(years=1),
         "2Y": end - pd.DateOffset(years=2)
-    }.get(period, end - pd.DateOffset(years=1))
+    }[period]
 
     try:
-        prices = yf.download(list(tickers.values()), start=start, end=end, progress=False)["Adj Close"]
-        returns = ((prices.iloc[-1] / prices.iloc[0]) - 1) * 100
-        df = pd.DataFrame({"Benchmark": list(tickers.keys()), "Return (%)": returns.values})
+        prices = yf.download(list(tickers.values()), start=start, end=end, progress=False)
+        if isinstance(prices.columns, pd.MultiIndex) and "Close" in prices.columns.get_level_values(0):
+            close_prices = prices["Close"]
+        else:
+            return None
+
+        returns = ((close_prices.iloc[-1] / close_prices.iloc[0]) - 1) * 100
+        df = pd.DataFrame({
+            "Benchmark": list(tickers.keys()),
+            "Return (%)": returns.values
+        })
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 st.subheader("📊 HBO vs Benchmark Returns")
@@ -174,7 +140,7 @@ if bench_df is not None:
         hbo_return = ((hbo_filtered["HBO Share Price"].iloc[-1] / hbo_filtered["HBO Share Price"].iloc[0]) - 1) * 100
         bench_df.loc[len(bench_df.index)] = ["HBO Fund", hbo_return]
     fig_benchmark = px.bar(bench_df, x="Benchmark", y="Return (%)", text_auto=".2f")
-    fig_benchmark.update_layout(template="plotly_dark" if theme else "plotly_white")
+    fig_benchmark.update_layout(template="plotly_white")
     st.plotly_chart(fig_benchmark, use_container_width=True)
 else:
     st.warning("⚠️ Failed to fetch benchmark data. Try refreshing later.")
@@ -209,5 +175,7 @@ with col1:
 with col2:
     st.download_button("Download Investor Table", table_df.to_csv(index=False).encode('utf-8'),
                        "investors.csv", "text/csv", key="inv_download", help="Download investor performance table")
+
+st.image("hbo.png", width=500)
 
 st.caption("© Built by Henri | Live from Google Sheets")
