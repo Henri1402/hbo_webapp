@@ -104,60 +104,92 @@ with col2:
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------
-# BENCHMARK RETURNS
+# BENCHMARK RETURNS (euro‐based + dividends)
 # -----------------------
 @st.cache_data(ttl=3600)
 def fetch_benchmark_returns(period):
+    # we’ll rebase the S&P500 into EUR via EUR/USD FX
     tickers = {
-        "S&P 500": "^GSPC",
-        "NASDAQ": "^IXIC",
-        "BEL20": "^BFX",
-        "Gold": "GC=F"
+        "S&P 500 (EUR)": "^GSPC",
+        "EUR/USD":      "EURUSD=X",
+        "NASDAQ":       "^IXIC",
+        "BEL20":        "^BFX",
+        "Gold":         "GC=F",
     }
+
     end = datetime.today()
     start = {
         "YTD": datetime(end.year, 1, 1),
-        "1M": end - pd.DateOffset(months=1),
-        "1Y": end - pd.DateOffset(years=1),
-        "2Y": end - pd.DateOffset(years=2)
+        "1M":  end - pd.DateOffset(months=1),
+        "1Y":  end - pd.DateOffset(years=1),
+        "2Y":  end - pd.DateOffset(years=2),
     }[period]
 
     try:
-        prices = yf.download(list(tickers.values()), start=start, end=end, progress=False)
-        if isinstance(prices.columns, pd.MultiIndex) and "Close" in prices.columns.get_level_values(0):
-            close_prices = prices["Close"]
-        else:
-            return None
+        # auto_adjust=True gives you total returns (incl. dividends/splits)
+        data = yf.download(
+            list(tickers.values()),
+            start=start,
+            end=end,
+            auto_adjust=True,
+            progress=False
+        )["Close"]
+        # rename cols back to friendly names
+        data.columns = list(tickers.keys())
 
-        returns = ((close_prices.iloc[-1] / close_prices.iloc[0]) - 1) * 100
-        df = pd.DataFrame({
-            "Benchmark": list(tickers.keys()),
-            "Return (%)": returns.values
+        # rebase S&P 500 price into EUR
+        data["S&P 500 (EUR)"] = data["S&P 500 (EUR)"] / data["EUR/USD"]
+
+        # only report the four benchmarks (drop the FX series itself)
+        cols = ["S&P 500 (EUR)", "NASDAQ", "BEL20", "Gold"]
+        pct = (data[cols].iloc[-1] / data[cols].iloc[0] - 1) * 100
+
+        return pd.DataFrame({
+            "Benchmark": pct.index,
+            "Return (%)": pct.values
         })
-        return df
     except Exception:
         return None
 
 st.subheader("📊 HBO vs Benchmark Returns")
-period = st.selectbox("Select Time Period", ["YTD", "1M", "1Y", "2Y"], index=2)
+# default index=0 so it begins on YTD
+period = st.selectbox(
+    "Select Time Period",
+    ["YTD", "1M", "1Y", "2Y"],
+    index=0
+)
+
 bench_df = fetch_benchmark_returns(period)
 
 if bench_df is not None:
+    # compute HBO Fund’s return over the same window
     start_date = {
         "YTD": datetime(datetime.today().year, 1, 1),
-        "1M": datetime.today() - pd.DateOffset(months=1),
-        "1Y": datetime.today() - pd.DateOffset(years=1),
-        "2Y": datetime.today() - pd.DateOffset(years=2),
+        "1M":  datetime.today() - pd.DateOffset(months=1),
+        "1Y":  datetime.today() - pd.DateOffset(years=1),
+        "2Y":  datetime.today() - pd.DateOffset(years=2),
     }[period]
+
     hbo_filtered = hbo_df[hbo_df["Date"] >= start_date]
     if not hbo_filtered.empty:
-        hbo_return = ((hbo_filtered["HBO Share Price"].iloc[-1] / hbo_filtered["HBO Share Price"].iloc[0]) - 1) * 100
-        bench_df.loc[len(bench_df.index)] = ["HBO Fund", hbo_return]
-    fig_benchmark = px.bar(bench_df, x="Benchmark", y="Return (%)", text_auto=".2f")
+        hbo_return = (
+            hbo_filtered["HBO Share Price"].iloc[-1]
+            / hbo_filtered["HBO Share Price"].iloc[0]
+            - 1
+        ) * 100
+        bench_df.loc[len(bench_df)] = ["HBO Fund", hbo_return]
+
+    fig_benchmark = px.bar(
+        bench_df,
+        x="Benchmark",
+        y="Return (%)",
+        text_auto=".2f"
+    )
     fig_benchmark.update_layout(template="plotly_white")
     st.plotly_chart(fig_benchmark, use_container_width=True)
 else:
     st.warning("⚠️ Failed to fetch benchmark data. Try refreshing later.")
+
 
 # -----------------------
 # PERFORMANCE TABLE
