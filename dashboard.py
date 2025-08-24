@@ -38,27 +38,52 @@ if not st.session_state.authenticated:
 # -----------------------
 # DATA LOADING & CACHING
 # -----------------------
-@st.cache_data(ttl=600)  # Cache data for 10 minutes
+@st.cache_data(ttl=600)
 def load_data():
     """Loads and cleans data from Google Sheets."""
     try:
         hbo_url = "https://docs.google.com/spreadsheets/d/1QgnWMF_fF0fdkAEvZvfO-MfR1Gme6kwOqC4928te1J0/export?format=csv&gid=0"
         ownership_url = "https://docs.google.com/spreadsheets/d/1QgnWMF_fF0fdkAEvZvfO-MfR1Gme6kwOqC4928te1J0/export?format=csv&gid=900806856"
-        
-        hbo_df = pd.read_csv(hbo_url, sep=",", decimal=",", encoding="utf-8-sig")
+
+        # --- Load and Clean HBO Data Sheet ---
+        hbo_df = pd.read_csv(hbo_url, sep=",", encoding="utf-8-sig", dtype=str)
         hbo_df.rename(columns=lambda x: x.strip().replace('\ufeff', ''), inplace=True)
         hbo_df['Date'] = pd.to_datetime(hbo_df['Date'], dayfirst=True)
-        
-        owner_df = pd.read_csv(ownership_url, sep=",", decimal=",", encoding="utf-8-sig")
+
+        cols_to_clean = ['Degiro', 'InteractiveBrokers', 'Total HBO Value', 'Shares', 'HBO Share Price']
+        for col in cols_to_clean:
+            if col in hbo_df.columns:
+                # Correctly handle numbers like '1.500,00' -> 1500.00
+                hbo_df[col] = (
+                    hbo_df[col]
+                    .str.replace(r"\.", "", regex=True)   # remove thousand separators
+                    .str.replace(",", ".", regex=False)   # fix decimal separator
+                    .astype(float)
+                )
+
+        # --- Load and Clean Ownership Data Sheet ---
+        owner_df = pd.read_csv(ownership_url, sep=",", encoding="utf-8-sig", dtype=str)
         owner_df.rename(columns=lambda x: x.strip().replace('\ufeff', ''), inplace=True)
+
+        # Proper fix for European-style numbers: "€ 2,144.68" -> 2144.68
+        owner_df['Invested Capital'] = (
+            owner_df['Invested Capital']
+            .str.replace("€", "", regex=False)
+            .str.strip()
+            .str.replace(r"[,.](?=\d{3}(?:\D|$))", "", regex=True)  # remove thousand separators only
+            .str.replace(",", ".", regex=False)                     # replace decimal comma if present
+            .astype(float)
+        )
+
+        owner_df['Total Shares'] = owner_df['Total Shares'].astype(int)
+
         return hbo_df, owner_df
     except Exception as e:
-        st.error(f"Failed to load data. Please check the connection. Error: {e}")
+        st.error(f"Failed to load data. The data format in Google Sheets might be incorrect. Error: {e}")
         return None, None
 
 hbo_df, owner_df = load_data()
 
-# Stop execution if data loading fails
 if hbo_df is None or owner_df is None:
     st.stop()
 
@@ -67,29 +92,22 @@ if hbo_df is None or owner_df is None:
 # -----------------------
 def process_data(hbo_df, owner_df):
     """Processes loaded data to compute key metrics."""
-    # Convert 'Invested Capital' to a numeric type, removing currency symbols, thousands separators, and whitespace
-    owner_df['Invested Capital'] = owner_df['Invested Capital'].replace({'€': '', ',': '', '\s+': ''}, regex=True).astype(float)
-    owner_df['Total Shares'] = owner_df['Total Shares'].astype(int)
+    latest_data = hbo_df.sort_values("Date", ascending=False).iloc[0]
+    latest_price = latest_data["HBO Share Price"]
+    total_aum = latest_data["Total HBO Value"]
 
-    hbo_df['HBO Share Price'] = hbo_df['HBO Share Price'].astype(str).str.replace(',', '.').astype(float)
-    
-    latest_price = hbo_df.sort_values("Date", ascending=False)["HBO Share Price"].iloc[0]
-    
     owner_df['Total Value (€)'] = owner_df['Total Shares'] * latest_price
     owner_df['Return (€)'] = owner_df['Total Value (€)'] - owner_df['Invested Capital']
-    
-    # Avoid division by zero for new investments
-    owner_df['ROI (%)'] = 0.0
-    # Calculate ROI only for rows where 'Invested Capital' is not zero
-    non_zero_capital = owner_df['Invested Capital'] != 0
-    owner_df.loc[non_zero_capital, 'ROI (%)'] = (owner_df.loc[non_zero_capital, 'Return (€)'] / owner_df.loc[non_zero_capital, 'Invested Capital']) * 100
 
-    total_aum = owner_df['Total Value (€)'].sum()
-    
+    owner_df['ROI (%)'] = 0.0
+    non_zero_capital = owner_df['Invested Capital'] > 0
+    owner_df.loc[non_zero_capital, 'ROI (%)'] = (
+        owner_df.loc[non_zero_capital, 'Return (€)'] / owner_df.loc[non_zero_capital, 'Invested Capital']
+    ) * 100
+
     return latest_price, total_aum, owner_df
 
 latest_price, total_aum, owner_df = process_data(hbo_df, owner_df)
-
 
 # -----------------------
 # SIDEBAR NAVIGATION
@@ -100,19 +118,18 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard Overview", "Investor Details", "Data Downloads"]
+    ["HBO Share Price", "HBO Portfolio", "Investor Details", "Data Downloads"]
 )
 
 st.sidebar.markdown("---")
 st.sidebar.info("© Built by Henri | Live from Google Sheets")
 
 # -----------------------
-# PAGE: DASHBOARD OVERVIEW
+# PAGE: HBO SHARE PRICE
 # -----------------------
-if page == "Dashboard Overview":
-    st.title("📈 Dashboard Overview")
+if page == "HBO Share Price":
+    st.title("📈 HBO Share Price")
 
-    # --- Key Metrics ---
     col1, col2 = st.columns(2)
     with col1:
         st.metric(label="**Total Assets Under Management (AUM)**", value=f"€ {total_aum:,.2f}")
@@ -121,14 +138,12 @@ if page == "Dashboard Overview":
 
     st.markdown("---")
 
-    # --- Share Price Chart ---
     st.subheader("HBO Share Price Performance")
     fig_line = px.line(hbo_df, x="Date", y="HBO Share Price", markers=True,
                        labels={"Date": "Date", "HBO Share Price": "Share Price (€)"})
     fig_line.update_traces(line=dict(color='royalblue', width=2), marker=dict(color='darkblue', size=8))
     fig_line.update_layout(
         template="plotly_white",
-        title="",
         xaxis_title="Date",
         yaxis_title="Share Price (€)",
         margin=dict(t=20, l=20, r=20, b=20),
@@ -137,13 +152,30 @@ if page == "Dashboard Overview":
     st.plotly_chart(fig_line, use_container_width=True)
 
 # -----------------------
+# PAGE: HBO PORTFOLIO
+# -----------------------
+elif page == "HBO Portfolio":
+    st.title("📊 HBO Portfolio Value")
+
+    portfolio_df = hbo_df.melt(id_vars=['Date'], value_vars=['Degiro', 'InteractiveBrokers', 'Total HBO Value'],
+                               var_name='Portfolio', value_name='Value (€)')
+
+    fig_portfolio = px.line(portfolio_df, x='Date', y='Value (€)', color='Portfolio',
+                            title='Portfolio Value Over Time by Broker',
+                            labels={'Value (€)': 'Portfolio Value (€)', 'Date': 'Date', 'Portfolio': 'Broker/Total'})
+    fig_portfolio.update_layout(
+        template="plotly_white",
+        legend_title_text='Portfolio'
+    )
+    st.plotly_chart(fig_portfolio, use_container_width=True)
+
+# -----------------------
 # PAGE: INVESTOR DETAILS
 # -----------------------
 elif page == "Investor Details":
     st.title("👥 Investor Details")
     st.markdown("An in-depth look at capital distribution and individual performance.")
-    
-    # --- Investor Performance Table ---
+
     st.subheader("Investor Performance Overview")
     table_df = owner_df.copy()
     table_df = table_df.rename(columns={
@@ -151,13 +183,12 @@ elif page == "Investor Details":
         "Invested Capital": "Invested (€)",
         "Total Shares": "Shares"
     })
-    
-    # Formatting for display
+
     table_df["Invested (€)"] = table_df["Invested (€)"].map("€ {:,.2f}".format)
     table_df["Total Value (€)"] = table_df["Total Value (€)"].map("€ {:,.2f}".format)
     table_df["Return (€)"] = table_df["Return (€)"].map("€ {:,.2f}".format)
     table_df["ROI (%)"] = table_df["ROI (%)"].map("{:.2f}%".format)
-    
+
     st.dataframe(
         table_df[["Name", "Invested (€)", "Shares", "Total Value (€)", "Return (€)", "ROI (%)"]],
         use_container_width=True,
@@ -165,8 +196,7 @@ elif page == "Investor Details":
     )
 
     st.markdown("---")
-    
-    # --- Pie & Bar Charts ---
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Capital Invested Distribution")
@@ -176,7 +206,7 @@ elif page == "Investor Details":
 
     with col2:
         st.subheader("Shares Held Per Investor")
-        fig_bar = px.bar(owner_df.sort_values('Total Shares', ascending=False), 
+        fig_bar = px.bar(owner_df.sort_values('Total Shares', ascending=False),
                          x="Full Name", y="Total Shares", text_auto=True)
         fig_bar.update_layout(template="plotly_white", xaxis_title="", yaxis_title="Number of Shares", margin=dict(t=20, b=20))
         fig_bar.update_traces(marker_color='lightskyblue')
@@ -189,7 +219,6 @@ elif page == "Data Downloads":
     st.title("📥 Data Downloads")
     st.markdown("Download the underlying data for your own analysis.")
 
-    # --- Download Buttons ---
     col1, col2 = st.columns(2)
     with col1:
         st.download_button(
@@ -201,13 +230,12 @@ elif page == "Data Downloads":
         )
 
     with col2:
-        # Prepare a clean version for download
         download_owner_df = owner_df.rename(columns={
             "Full Name": "Name",
             "Invested Capital": "Invested (€)",
             "Total Shares": "Shares"
         })
-        
+
         st.download_button(
             label="⬇️ Download Investor Table",
             data=download_owner_df.to_csv(index=False).encode('utf-8'),
