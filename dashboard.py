@@ -184,16 +184,38 @@ elif page == "Investor Details":
         "Total Shares": "Shares"
     })
 
+    # --- Add Total Row ---
+    total_row = {
+        "Name": "TOTAL",
+        "Invested (€)": table_df["Invested (€)"].sum(),
+        "Shares": table_df["Shares"].sum(),
+        "Total Value (€)": table_df["Total Value (€)"].sum(),
+        "Return (€)": table_df["Return (€)"].sum(),
+        "ROI (%)": (
+            (table_df["Return (€)"].sum() / table_df["Invested (€)"].sum()) * 100
+            if table_df["Invested (€)"].sum() > 0 else 0
+        )
+    }
+    table_df = pd.concat([table_df, pd.DataFrame([total_row])], ignore_index=True)
+
+    # Format numbers
     table_df["Invested (€)"] = table_df["Invested (€)"].map("€ {:,.2f}".format)
     table_df["Total Value (€)"] = table_df["Total Value (€)"].map("€ {:,.2f}".format)
     table_df["Return (€)"] = table_df["Return (€)"].map("€ {:,.2f}".format)
     table_df["ROI (%)"] = table_df["ROI (%)"].map("{:.2f}%".format)
 
-    st.dataframe(
-        table_df[["Name", "Invested (€)", "Shares", "Total Value (€)", "Return (€)", "ROI (%)"]],
-        use_container_width=True,
-        hide_index=True
+    # --- Styling for TOTAL row ---
+    def highlight_total(row):
+        if row["Name"] == "TOTAL":
+            return ['font-weight: bold; background-color: #f4f4f4; color: black'] * len(row)
+        else:
+            return [''] * len(row)
+
+    styled_df = table_df[["Name", "Invested (€)", "Shares", "Total Value (€)", "Return (€)", "ROI (%)"]].style.apply(
+        highlight_total, axis=1
     )
+
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
