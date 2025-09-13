@@ -165,7 +165,8 @@ elif page == "HBO Portfolio":
                             labels={'Value (€)': 'Portfolio Value (€)', 'Date': 'Date', 'Portfolio': 'Broker/Total'})
     fig_portfolio.update_layout(
         template="plotly_white",
-        legend_title_text='Portfolio'
+        legend_title_text='Portfolio',
+        height=600
     )
     st.plotly_chart(fig_portfolio, use_container_width=True)
 
